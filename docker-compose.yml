@@ -1,0 +1,39 @@
+
+# network_mode: host, not the usual bridge network + host.docker.internal, because Postgres here
+# only listens on `localhost` (`listen_addresses = localhost` in the system postgresql.conf) -
+# bridge networking would need that widened to accept connections from the Docker bridge subnet,
+# which means editing system-wide Postgres config (with sudo) to expose it more broadly on the
+# whole machine just for this project. With host networking, "localhost" inside the container
+# already IS the host's real loopback, so Postgres and llama-server need no changes at all.
+# Trade-off: Linux-only (fine, this is a Linux dev machine) and no compose-internal DNS between
+# services - both containers just talk to each other over 127.0.0.1 like any other local process.
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    network_mode: host
+    env_file:
+      - .env
+    volumes:
+      - ./backend:/app/backend:ro # live-reload on code changes, no rebuild needed
+      - ./data:/app/data:ro
+      # ../model_service/.env is outside this build context and wasn't reachable at all inside
+      # the container - config.py's MODEL_SERVICE_ENV resolves to BASE_DIR.parent/model_service/.env,
+      # and BASE_DIR is /app here, so the mount target must be exactly /model_service/.env.
+      # Without it, MODEL_API_KEY silently fell back to "not-needed" and the provider API 401'd.
+      - ../model_service/.env:/model_service/.env:ro
+    command: ["uvicorn", "backend.app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+  ui:
+    build:
+      context: .
+      dockerfile: ui/Dockerfile
+    network_mode: host
+    environment:
+      - BACKEND_URL=http://127.0.0.1:8000
+    volumes:
+      - ./ui:/app/ui:ro
+    depends_on:
+      - backend

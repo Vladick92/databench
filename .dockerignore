@@ -1,0 +1,9 @@
+.venv/
+.git/
+docs/
+eval/results/
+__pycache__/
+*.pyc
+.env
+CLAUDE.md
+CLAUDE.local.md

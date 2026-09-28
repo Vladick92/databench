@@ -1,0 +1,13 @@
+agent-framework-core==1.19.0
+agent-framework-openai==1.14.4
+fastapi==0.141.1
+uvicorn[standard]==0.54.0
+streamlit==1.64.0
+httpx
+duckdb==1.5.5
+sqlglot==30.20.0
+psycopg[binary]==3.3.6
+pandas
+openpyxl
+jinja2
+python-dotenv
