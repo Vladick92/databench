@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from agent_framework import tool
 
-from .. import config
+from backend.app import config
 from .connectors import list_all_sources
 
 

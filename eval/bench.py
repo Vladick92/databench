@@ -35,7 +35,7 @@ import httpx
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from backend.app.tools.sql_guard import SQLValidationError, validate_readonly_sql  # noqa: E402
+from backend.app.agents.data_agent.tools.sql_guard import SQLValidationError, validate_readonly_sql  # noqa: E402
 from eval.cases import CASES, EvalCase  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent

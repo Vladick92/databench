@@ -14,7 +14,7 @@ import duckdb
 import pandas as pd
 from agent_framework import tool
 
-from .. import config
+from backend.app import config
 from .connectors import EXECUTE_TABLE_CODE, DataSource, list_all_sources
 from .sql_guard import SQLValidationError, validate_readonly_sql
 

@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from .agent import build_agent
+from .agents.data_agent import build_data_agent
 
 app = FastAPI(title="databench data agent")
 _sessions: dict[str, object] = {}
@@ -23,14 +23,14 @@ class ChatRequest(BaseModel):
 
 def _get_session(session_id: str):
     if session_id not in _sessions:
-        _sessions[session_id] = build_agent().create_session()
+        _sessions[session_id] = build_data_agent().create_session()
     return _sessions[session_id]
 
 
 @app.post("/chat")
 async def chat(req: ChatRequest) -> dict:
     """Non-streaming: the whole answer plus the tool calls made along the way."""
-    agent = build_agent()
+    agent = build_data_agent()
     session = _get_session(req.session_id)
     tool_calls: list[dict] = []
     answer = ""
@@ -51,7 +51,7 @@ async def chat_stream(req: ChatRequest) -> StreamingResponse:
     """Streaming variant: newline-delimited JSON events {"type": "text"|"tool_call", ...}."""
     import json
 
-    agent = build_agent()
+    agent = build_data_agent()
     session = _get_session(req.session_id)
 
     async def events():

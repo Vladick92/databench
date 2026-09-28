@@ -13,7 +13,7 @@ from typing import Annotated
 import psycopg
 from agent_framework import tool
 
-from .. import config
+from backend.app import config
 from .sql_guard import SQLValidationError, validate_readonly_sql
 
 

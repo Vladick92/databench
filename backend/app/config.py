@@ -9,7 +9,7 @@ from pathlib import Path
 
 from dotenv import dotenv_values, load_dotenv
 
-from .tools.connectors import DataSourceConnector, LocalFileConnector, PostgresConnector
+from .agents.data_agent.tools.connectors import DataSourceConnector, LocalFileConnector, PostgresConnector
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent  # databench/
 MODEL_SERVICE_ENV = BASE_DIR.parent / "model_service" / ".env"
@@ -71,4 +71,5 @@ MODEL_API_KEY = (
     or "not-needed"
 )
 
-AGENT_NAME = "DataAgent"
+# Per-agent names, one constant each as agents are added (see backend/app/agents/).
+DATA_AGENT_NAME = "DataAgent"
