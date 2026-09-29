@@ -1,6 +1,6 @@
 # Copy to terraform.tfvars (gitignored) and fill in, or pass via -var/TF_VAR_*.
 # groq_api_key should NOT go in this file if you ever intend to commit it - use
-# TF_VAR_groq_api_key instead (see terraform/README.md).
+# TF_VAR_groq_api_key instead (see terraform/README.md). Same for the optional openrouter_api_key.
 
 location            = "polandcentral"
 environment         = "dev"

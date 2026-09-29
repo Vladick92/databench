@@ -26,13 +26,20 @@ variable "image_tag" {
 variable "model_name" {
   type        = string
   description = "Overrides the Groq preset's default model if set."
-  default     = "openai/gpt-oss-20b"
+  default     = "openai/gpt-oss-120b"
 }
 
 variable "groq_api_key" {
   type        = string
   description = "Set via TF_VAR_groq_api_key, sourced from ../model_service/.env - never put this in a .tfvars file that could get committed."
   sensitive   = true
+}
+
+variable "openrouter_api_key" {
+  type        = string
+  description = "Optional. If set, the backend falls back to OpenRouter (a free model, see backend/app/config.py) whenever Groq is rate-limited or down. Set via TF_VAR_openrouter_api_key, sourced from ../model_service/.env - never put this in a .tfvars file that could get committed. Leave empty for no fallback."
+  sensitive   = true
+  default     = ""
 }
 
 # --- Cost guard ---

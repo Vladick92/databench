@@ -36,6 +36,7 @@ system-assigned managed identity.
    ```bash
    export ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
    export TF_VAR_groq_api_key=$(grep '^GROQ_API_KEY=' ../../model_service/.env | cut -d= -f2)
+export TF_VAR_openrouter_api_key=$(grep '^OPENROUTER_API_KEY=' ../../model_service/.env | cut -d= -f2)   # optional: enables the OpenRouter fallback
    ```
    Never put this in a `.tfvars` file you might commit - `TF_VAR_*` env vars only.
 
@@ -45,6 +46,7 @@ cd databench/terraform
 az login
 export ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
 export TF_VAR_groq_api_key=$(grep '^GROQ_API_KEY=' ../../model_service/.env | cut -d= -f2)
+export TF_VAR_openrouter_api_key=$(grep '^OPENROUTER_API_KEY=' ../../model_service/.env | cut -d= -f2)   # optional: enables the OpenRouter fallback
 cp terraform.tfvars.example terraform.tfvars   # then edit budget_alert_email at minimum
 
 terraform init
@@ -63,7 +65,7 @@ az webapp restart -g $(terraform -chdir=terraform output -raw resource_group_nam
 Open the UI: `terraform output ui_url`.
 
 ## Things worth knowing
-- **State has secrets.** `groq_api_key` (as `MODEL_API_KEY` in the backend Web App's settings) is stored in `terraform.tfstate` in plain text - same tradeoff project 01 already made for `model_api_key`; fine for a local/solo learning setup with local state, not for a shared/remote backend without also adding Key Vault.
+- **State has secrets.** `groq_api_key` (as `MODEL_API_KEY` in the backend Web App's settings, and `openrouter_api_key` as `OPENROUTER_API_KEY` if set) is stored in `terraform.tfstate` in plain text - same tradeoff project 01 already made for `model_api_key`; fine for a local/solo learning setup with local state, not for a shared/remote backend without also adding Key Vault.
 - **Container logging is on from the start** (`logs` block in `modules/web_app`) - project 01 hit a 503 with nothing to read because this was off; not repeating that here.
 - **B1, not F1.** Two Web Apps share one plan; F1's 60 CPU-min/day cap and no-Always-On would hurt with two apps on it. `always_on = true` and `use_32_bit_worker = false` follow from being off F1.
 - **Blob access tier is Hot**, not Cool/Archive, despite "least expensive" - Cool/Archive charge per-operation retrieval fees and have minimum retention periods, which cost more overall for a workbench with active upload/list/delete from the UI, not archived data.

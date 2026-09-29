@@ -60,13 +60,20 @@ module "backend_app" {
   container_port      = 8000
   websockets_enabled  = false # FastAPI here doesn't use websockets - only the UI does
 
-  app_settings = {
-    MODEL_PROVIDER               = "groq"
-    MODEL_NAME                   = var.model_name
-    MODEL_API_KEY                = var.groq_api_key
-    AZURE_STORAGE_ACCOUNT_NAME   = module.storage.name
-    AZURE_STORAGE_CONTAINER_NAME = module.storage.container_name
-  }
+  app_settings = merge(
+    {
+      MODEL_PROVIDER               = "groq"
+      MODEL_NAME                   = var.model_name
+      MODEL_API_KEY                = var.groq_api_key
+      AZURE_STORAGE_ACCOUNT_NAME   = module.storage.name
+      AZURE_STORAGE_CONTAINER_NAME = module.storage.container_name
+    },
+    # Opt-in: only when a key is given does the backend get a fallback provider (backend/app/llm.py).
+    var.openrouter_api_key == "" ? {} : {
+      MODEL_FALLBACK_PROVIDERS = "openrouter"
+      OPENROUTER_API_KEY       = var.openrouter_api_key
+    },
+  )
 }
 
 # --- UI Web App ---
