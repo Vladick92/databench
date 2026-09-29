@@ -7,7 +7,6 @@ past validate_readonly_sql, it would land in a connection that's closed and disc
 """
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Annotated
 
 import duckdb
@@ -15,10 +14,8 @@ import pandas as pd
 from agent_framework import tool
 
 from backend.app import config
-from .connectors import EXECUTE_TABLE_CODE, DataSource, list_all_sources
+from .connectors import EXECUTE_TABLE_CODE, DataSource, list_all_sources, read_source_dataframe
 from .sql_guard import SQLValidationError, validate_readonly_sql
-
-_READERS = {".csv": pd.read_csv, ".xlsx": pd.read_excel, ".xls": pd.read_excel}
 
 
 def _find_source(name: str) -> DataSource | None:
@@ -53,9 +50,8 @@ def execute_table_code(
     except SQLValidationError as e:
         return f"Rejected: {e}"
 
-    reader = _READERS[Path(source.location).suffix.lower()]
     try:
-        df = reader(source.location)
+        df = read_source_dataframe(source)
     except Exception as e:
         return f"Error reading {source.location}: {e}"
 

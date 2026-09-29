@@ -11,3 +11,5 @@ pandas
 openpyxl
 jinja2
 python-dotenv
+azure-identity
+azure-storage-blob

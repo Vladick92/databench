@@ -7,12 +7,15 @@ add an instance to `CONNECTORS` in config.py. Nothing that calls `list_all_sourc
 """
 from __future__ import annotations
 
+import io
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import pandas as pd
 import psycopg
+from azure.identity import DefaultAzureCredential
+from azure.storage.blob import BlobClient, BlobServiceClient
 
 # How a source's rows are actually read.
 EXECUTE_SQL_QUERY = "execute_sql_query"
@@ -114,6 +117,71 @@ class PostgresConnector(DataSourceConnector):
             )
             for table_name, columns in tables.items()
         ]
+
+
+def _is_blob_location(location: str) -> bool:
+    return ".blob.core.windows.net/" in location
+
+
+def _read_blob_dataframe(blob_url: str, reader, nrows: int | None = None) -> pd.DataFrame:
+    # DefaultAzureCredential tries, in order: env vars, managed identity (this is what actually
+    # fires once deployed to the Web App), then falls back to `az login` locally for testing.
+    client = BlobClient.from_blob_url(blob_url, credential=DefaultAzureCredential())
+    data = client.download_blob().readall()
+    return reader(io.BytesIO(data), nrows=nrows)
+
+
+def read_source_dataframe(source: DataSource) -> pd.DataFrame:
+    """Read a file-backed DataSource (local or blob) fully into a DataFrame. Used by
+    execute_table_code - the one place that needs the real, full file, not just a sample."""
+    if _is_blob_location(source.location):
+        suffix = Path(source.location.rsplit("/", 1)[-1]).suffix.lower()
+        return _read_blob_dataframe(source.location, _READERS[suffix])
+    return _READERS[Path(source.location).suffix.lower()](source.location)
+
+
+@dataclass
+class BlobFileConnector(DataSourceConnector):
+    """Scans one Azure Blob Storage container for .csv/.xlsx/.xls blobs - the cloud equivalent
+    of LocalFileConnector, added alongside it (not replacing it) so the sample data/ folder
+    baked into the image and user-uploaded blobs both show up as sources once deployed."""
+
+    account_url: str  # https://<account>.blob.core.windows.net
+    container_name: str
+    sample_rows: int = 50
+
+    def list_sources(self) -> list[DataSource]:
+        try:
+            credential = DefaultAzureCredential()
+            container = BlobServiceClient(
+                account_url=self.account_url, credential=credential
+            ).get_container_client(self.container_name)
+            blob_names = [b.name for b in container.list_blobs()]
+        except Exception:
+            return []  # storage unreachable/misconfigured right now - not fatal, just no blob sources
+
+        sources = []
+        for blob_name in blob_names:
+            suffix = Path(blob_name).suffix.lower()
+            reader = _READERS.get(suffix)
+            if reader is None:
+                continue
+            blob_url = f"{self.account_url}/{self.container_name}/{blob_name}"
+            try:
+                sample = _read_blob_dataframe(blob_url, reader, nrows=self.sample_rows)
+            except Exception:
+                continue  # unreadable/corrupt blob: skip it, don't break the whole listing
+            sources.append(
+                DataSource(
+                    name=Path(blob_name).stem,
+                    kind=_KIND_BY_SUFFIX[suffix],
+                    tool=EXECUTE_TABLE_CODE,
+                    columns={c: str(t) for c, t in sample.dtypes.items()},
+                    row_count=None,
+                    location=blob_url,
+                )
+            )
+        return sources
 
 
 def list_all_sources(connectors: list[DataSourceConnector]) -> list[DataSource]:

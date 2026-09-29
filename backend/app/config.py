@@ -9,7 +9,12 @@ from pathlib import Path
 
 from dotenv import dotenv_values, load_dotenv
 
-from .agents.data_agent.tools.connectors import DataSourceConnector, LocalFileConnector, PostgresConnector
+from .agents.data_agent.tools.connectors import (
+    BlobFileConnector,
+    DataSourceConnector,
+    LocalFileConnector,
+    PostgresConnector,
+)
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent  # databench/
 MODEL_SERVICE_ENV = BASE_DIR.parent / "model_service" / ".env"
@@ -29,9 +34,21 @@ POSTGRES_SCHEMA = os.getenv("POSTGRES_SCHEMA", "public")
 POSTGRES_STATEMENT_TIMEOUT_MS = int(os.getenv("POSTGRES_STATEMENT_TIMEOUT_MS", "5000"))
 MAX_ROWS_RETURNED = int(os.getenv("MAX_ROWS_RETURNED", "50"))
 
+# Set by Terraform as Web App settings (see terraform/main.tf's backend_app module) - unset
+# locally, so BlobFileConnector just isn't registered and only the local data/ folder shows up.
+AZURE_STORAGE_ACCOUNT_NAME = os.getenv("AZURE_STORAGE_ACCOUNT_NAME") or None
+AZURE_STORAGE_CONTAINER_NAME = os.getenv("AZURE_STORAGE_CONTAINER_NAME", "tabular-data")
+AZURE_STORAGE_ACCOUNT_URL = (
+    f"https://{AZURE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net" if AZURE_STORAGE_ACCOUNT_NAME else None
+)
+
+# Blob is additive, not a replacement for local files: the sample data/ folder ships baked into
+# the image either way, blob storage adds whatever the owner uploads through the UI on top of it.
 CONNECTORS: list[DataSourceConnector] = [LocalFileConnector(DATA_DIR)]
 if POSTGRES_DSN:
     CONNECTORS.append(PostgresConnector(POSTGRES_DSN, schema=POSTGRES_SCHEMA))
+if AZURE_STORAGE_ACCOUNT_URL:
+    CONNECTORS.append(BlobFileConnector(AZURE_STORAGE_ACCOUNT_URL, AZURE_STORAGE_CONTAINER_NAME))
 
 # --- Model ---
 # One preset per provider: base URL, a small default model, and which key in

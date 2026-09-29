@@ -11,8 +11,10 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from .agents.data_agent import build_data_agent
+from .files import router as files_router
 
 app = FastAPI(title="databench data agent")
+app.include_router(files_router)
 _sessions: dict[str, object] = {}
 
 
