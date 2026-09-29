@@ -10,11 +10,11 @@ from __future__ import annotations
 from typing import Annotated
 
 import duckdb
-import pandas as pd
 from agent_framework import tool
 
 from backend.app import config
 from .connectors import EXECUTE_TABLE_CODE, DataSource, list_all_sources, read_source_dataframe
+from .results import finish_query
 from .sql_guard import SQLValidationError, validate_readonly_sql
 
 
@@ -23,15 +23,6 @@ def _find_source(name: str) -> DataSource | None:
         if source.name == name and source.tool == EXECUTE_TABLE_CODE:
             return source
     return None
-
-
-def _format_result(df: pd.DataFrame) -> str:
-    total = len(df)
-    truncated = df.head(config.MAX_ROWS_RETURNED)
-    text = truncated.to_csv(index=False)
-    if total > len(truncated):
-        text += f"... ({total} rows total, showing first {len(truncated)})\n"
-    return text
 
 
 @tool
@@ -64,4 +55,4 @@ def execute_table_code(
     finally:
         con.close()
 
-    return _format_result(result)
+    return finish_query(result, sql=validated.sql, exact_total=True)  # DuckDB gave us the whole result

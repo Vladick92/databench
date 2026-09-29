@@ -1,5 +1,6 @@
 """Thin Streamlit chat UI. All agent/tool logic lives in the FastAPI backend (backend/app/) -
 this file only sends messages and renders the response. Run: streamlit run ui/main.py"""
+import base64
 import json
 import os
 import uuid
@@ -14,7 +15,8 @@ st.set_page_config(page_title="databench — data agent", page_icon="📊")
 
 def init_state() -> None:
     if "messages" not in st.session_state:
-        st.session_state.messages = []  # [{"role", "content", "tools": [(name, result)]}]
+        # [{"role", "content", "tools": [(name, result)], "plots": [{"title", "png"}], "chart_summary", "errors"}]
+        st.session_state.messages = []
     if "session_id" not in st.session_state:
         st.session_state.session_id = str(uuid.uuid4())
 
@@ -69,27 +71,74 @@ def render_file_manager() -> None:
         st.rerun()
 
 
-def send_message(prompt: str, placeholder) -> tuple[str, list]:
-    answer = ""
-    tools: list[tuple[str, str]] = []
-    with httpx.stream(
-        "POST",
-        f"{BACKEND_URL}/chat/stream",
-        json={"session_id": st.session_state.session_id, "message": prompt},
-        timeout=120,
-    ) as r:
-        r.raise_for_status()
-        for line in r.iter_lines():
-            if not line:
-                continue
-            event = json.loads(line)
-            if event["type"] == "text":
-                answer += event["text"]
-                placeholder.markdown(answer + "▌")
-            elif event["type"] == "tool_call":
-                tools.append((event["name"], event["result"]))
-    placeholder.markdown(answer)
-    return answer, tools
+def render_reply(m: dict) -> None:
+    """A stored assistant message: the data agent's answer, then the statistician's chart(s) and
+    summary (only present for results big enough to be charted), then the tool calls."""
+    if m.get("failed"):
+        st.error(m["content"])
+    else:
+        st.markdown(m["content"])
+    for plot in m.get("plots", []):
+        st.image(plot["png"], width="stretch")
+    if m.get("chart_summary"):
+        st.markdown(m["chart_summary"])
+    for message in m.get("errors", []):
+        st.warning(f"Chart unavailable: {message}")
+    render_tools(m.get("tools", []))
+
+
+def send_message(prompt: str, container) -> dict:
+    """Stream one turn into `container`. Elements are added in the order events arrive, so the
+    answer streams first, then the chart appears and the chart summary streams below it."""
+    reply = {"content": "", "tools": [], "plots": [], "chart_summary": "", "errors": [], "failed": False}
+    answer_box = container.empty()
+    summary_box = progress = None
+    try:
+        with httpx.stream(
+            "POST",
+            f"{BACKEND_URL}/chat/stream",
+            json={"session_id": st.session_state.session_id, "message": prompt},
+            timeout=120,
+        ) as r:
+            r.raise_for_status()
+            for line in r.iter_lines():
+                if not line:
+                    continue
+                event = json.loads(line)
+                if event["type"] == "text" and event["agent"] == "data_agent":
+                    reply["content"] += event["text"]
+                    answer_box.markdown(reply["content"] + "▌")
+                elif event["type"] == "text":  # the statistician's summary
+                    summary_box = summary_box or container.empty()
+                    reply["chart_summary"] += event["text"]
+                    summary_box.markdown(reply["chart_summary"] + "▌")
+                elif event["type"] == "tool_call":
+                    reply["tools"].append((event["name"], event["result"]))
+                elif event["type"] == "stage":
+                    answer_box.markdown(reply["content"])
+                    progress = container.empty()
+                    progress.caption("📈 Building a chart...")
+                elif event["type"] == "plot":
+                    if progress is not None:
+                        progress.empty()
+                    reply["plots"].append({"title": event["title"], "png": base64.b64decode(event["png_b64"])})
+                    container.image(reply["plots"][-1]["png"], width="stretch")
+                elif event["type"] == "error" and event["agent"] == "data_agent":
+                    reply["content"], reply["failed"] = f"⚠️ Request failed: `{event['message']}`", True
+                elif event["type"] == "error":  # the statistician: the answer stands, only the chart is missing
+                    reply["errors"].append(event["message"])
+                    container.warning(f"Chart unavailable: {event['message']}")
+    except Exception as e:
+        reply["content"], reply["failed"] = f"⚠️ Request failed: `{type(e).__name__}: {e}`", True
+    if progress is not None:
+        progress.empty()
+    if reply["failed"]:
+        answer_box.error(reply["content"])
+        return reply
+    answer_box.markdown(reply["content"])
+    if summary_box is not None:
+        summary_box.markdown(reply["chart_summary"])
+    return reply
 
 
 init_state()
@@ -111,23 +160,21 @@ with st.sidebar:
     render_file_manager()
 
 st.title("📊 databench — data agent")
-st.caption("Ask questions about the files and database tables it has access to.")
+st.caption("Ask questions about the files and database tables it has access to. Big results get a chart.")
 
 for m in st.session_state.messages:
     with st.chat_message(m["role"]):
-        st.markdown(m["content"])
-        render_tools(m.get("tools", []))
+        if m["role"] == "assistant":
+            render_reply(m)
+        else:
+            st.markdown(m["content"])
 
 if prompt := st.chat_input("Ask something (try: what data sources are available?)"):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
     with st.chat_message("assistant"):
-        placeholder = st.empty()
-        try:
-            answer, tools = send_message(prompt, placeholder)
-            render_tools(tools)
-        except Exception as e:
-            answer, tools = f"⚠️ Request failed: `{type(e).__name__}: {e}`", []
-            placeholder.error(answer)
-    st.session_state.messages.append({"role": "assistant", "content": answer, "tools": tools})
+        container = st.container()
+        reply = send_message(prompt, container)
+        render_tools(reply["tools"])
+    st.session_state.messages.append({"role": "assistant", **reply})

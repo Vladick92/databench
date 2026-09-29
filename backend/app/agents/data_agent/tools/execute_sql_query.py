@@ -10,21 +10,13 @@ from __future__ import annotations
 
 from typing import Annotated
 
+import pandas as pd
 import psycopg
 from agent_framework import tool
 
 from backend.app import config
+from .results import finish_query
 from .sql_guard import SQLValidationError, validate_readonly_sql
-
-
-def _format_result(columns: list[str], rows: list[tuple]) -> str:
-    truncated = rows[: config.MAX_ROWS_RETURNED]
-    lines = [",".join(columns)]
-    lines += [",".join("" if v is None else str(v) for v in row) for row in truncated]
-    text = "\n".join(lines)
-    if len(rows) > len(truncated):
-        text += f"\n... (showing first {len(truncated)} rows)"
-    return text
 
 
 @tool
@@ -52,4 +44,9 @@ def execute_sql_query(
     except psycopg.Error as e:
         return f"Error running query: {e}"
 
-    return _format_result(columns, rows)
+    # Fetching stopped at cap + 1 rows, so the true total is only known if the result was shorter.
+    return finish_query(
+        pd.DataFrame(rows, columns=columns),
+        sql=validated.sql,
+        exact_total=len(rows) <= config.MAX_ROWS_RETURNED,
+    )

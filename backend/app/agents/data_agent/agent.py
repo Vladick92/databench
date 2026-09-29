@@ -7,10 +7,10 @@ ML trainer calling it as a sub-step (agent composition, see docs/PLAN.md) just i
 from pathlib import Path
 
 from agent_framework import Agent
-from agent_framework.openai import OpenAIChatCompletionClient
 from jinja2 import Environment, FileSystemLoader
 
 from backend.app import config
+from backend.app.llm import build_chat_client
 
 from .tools import TOOLS
 
@@ -23,13 +23,9 @@ def render_instructions() -> str:
     return template.render(
         agent_name=config.DATA_AGENT_NAME,
         max_rows_returned=config.MAX_ROWS_RETURNED,
+        chart_min_rows=config.CHART_MIN_ROWS,
     )
 
 
 def build_data_agent() -> Agent:
-    client = OpenAIChatCompletionClient(
-        model=config.MODEL_NAME,
-        base_url=config.MODEL_BASE_URL,
-        api_key=config.MODEL_API_KEY,
-    )
-    return Agent(client, render_instructions(), name=config.DATA_AGENT_NAME, tools=TOOLS)
+    return Agent(build_chat_client(), render_instructions(), name=config.DATA_AGENT_NAME, tools=TOOLS)
