@@ -22,8 +22,8 @@ output "storage_account_name" {
   value = module.storage.name
 }
 
-output "storage_container_name" {
-  value = module.storage.container_name
+output "cosmos_endpoint" {
+  value = module.cosmos.endpoint
 }
 
 output "push_images_command" {

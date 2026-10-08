@@ -10,8 +10,3 @@ variable "resource_group_name" {
 variable "location" {
   type = string
 }
-
-variable "container_name" {
-  type    = string
-  default = "tabular-data"
-}

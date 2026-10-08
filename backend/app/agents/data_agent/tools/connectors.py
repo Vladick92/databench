@@ -1,21 +1,20 @@
-"""Data source discovery, kept pluggable on purpose.
-
-Today there are two connectors: a folder of csv/xlsx files, and one local Postgres database.
-Later there will be more databases and more file locations (the docs/PLAN.md "dataset-agnostic"
-requirement). Adding one of those is: write a class implementing `DataSourceConnector.list_sources`,
-add an instance to `CONNECTORS` in config.py. Nothing that calls `list_all_sources` needs to change.
-"""
+"""Pluggable data source discovery: the sample csv/xlsx folder, one Postgres database, the requesting user's uploads.
+A new kind is a class implementing `list_sources`, added in `scope.active_connectors`; callers don't change."""
 from __future__ import annotations
 
 import io
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pandas as pd
 import psycopg
-from azure.identity import DefaultAzureCredential
-from azure.storage.blob import BlobClient, BlobServiceClient
+
+if TYPE_CHECKING:
+    from backend.app.userfiles import UserFiles
 
 # How a source's rows are actually read.
 EXECUTE_SQL_QUERY = "execute_sql_query"
@@ -33,6 +32,8 @@ class DataSource:
     columns: dict[str, str]  # column name -> dtype, as text
     row_count: int | None  # None when counting would be expensive/unknown
     location: str  # file path or "schema.table", for humans/debugging only
+    # File sources only: reads the whole file. The one thing execute_table_code needs beyond the sample.
+    load: Callable[[], pd.DataFrame] | None = field(default=None, compare=False, repr=False)
 
 
 class DataSourceConnector(ABC):
@@ -71,6 +72,46 @@ class LocalFileConnector(DataSourceConnector):
                     columns={c: str(t) for c, t in sample.dtypes.items()},
                     row_count=None,
                     location=str(path),
+                    load=partial(reader, path),
+                )
+            )
+        return sources
+
+
+@dataclass
+class UserFilesConnector(DataSourceConnector):
+    """The csv/xlsx files one user has uploaded to their own file space (a Blob container in Azure)."""
+
+    files: UserFiles
+    username: str
+    sample_rows: int = 50
+
+    def _load(self, name: str, reader) -> pd.DataFrame:
+        return reader(io.BytesIO(self.files.read(self.username, name)))
+
+    def list_sources(self) -> list[DataSource]:
+        try:
+            infos = self.files.list_tables(self.username)
+        except Exception:
+            return []  # storage unreachable/misconfigured right now - not fatal, just no uploaded sources
+
+        sources = []
+        for info in infos:
+            suffix = Path(info.name).suffix.lower()
+            reader = _READERS[suffix]
+            try:
+                sample = reader(io.BytesIO(self.files.read(self.username, info.name)), nrows=self.sample_rows)
+            except Exception:
+                continue  # unreadable/corrupt upload: skip it, don't break the whole listing
+            sources.append(
+                DataSource(
+                    name=Path(info.name).stem,
+                    kind=_KIND_BY_SUFFIX[suffix],
+                    tool=EXECUTE_TABLE_CODE,
+                    columns={c: str(t) for c, t in sample.dtypes.items()},
+                    row_count=None,
+                    location=f"your uploads/{info.name}",
+                    load=partial(self._load, info.name, reader),
                 )
             )
         return sources
@@ -119,73 +160,18 @@ class PostgresConnector(DataSourceConnector):
         ]
 
 
-def _is_blob_location(location: str) -> bool:
-    return ".blob.core.windows.net/" in location
-
-
-def _read_blob_dataframe(blob_url: str, reader, nrows: int | None = None) -> pd.DataFrame:
-    # DefaultAzureCredential tries, in order: env vars, managed identity (this is what actually
-    # fires once deployed to the Web App), then falls back to `az login` locally for testing.
-    client = BlobClient.from_blob_url(blob_url, credential=DefaultAzureCredential())
-    data = client.download_blob().readall()
-    return reader(io.BytesIO(data), nrows=nrows)
-
-
 def read_source_dataframe(source: DataSource) -> pd.DataFrame:
-    """Read a file-backed DataSource (local or blob) fully into a DataFrame. Used by
-    execute_table_code - the one place that needs the real, full file, not just a sample."""
-    if _is_blob_location(source.location):
-        suffix = Path(source.location.rsplit("/", 1)[-1]).suffix.lower()
-        return _read_blob_dataframe(source.location, _READERS[suffix])
-    return _READERS[Path(source.location).suffix.lower()](source.location)
-
-
-@dataclass
-class BlobFileConnector(DataSourceConnector):
-    """Scans one Azure Blob Storage container for .csv/.xlsx/.xls blobs - the cloud equivalent
-    of LocalFileConnector, added alongside it (not replacing it) so the sample data/ folder
-    baked into the image and user-uploaded blobs both show up as sources once deployed."""
-
-    account_url: str  # https://<account>.blob.core.windows.net
-    container_name: str
-    sample_rows: int = 50
-
-    def list_sources(self) -> list[DataSource]:
-        try:
-            credential = DefaultAzureCredential()
-            container = BlobServiceClient(
-                account_url=self.account_url, credential=credential
-            ).get_container_client(self.container_name)
-            blob_names = [b.name for b in container.list_blobs()]
-        except Exception:
-            return []  # storage unreachable/misconfigured right now - not fatal, just no blob sources
-
-        sources = []
-        for blob_name in blob_names:
-            suffix = Path(blob_name).suffix.lower()
-            reader = _READERS.get(suffix)
-            if reader is None:
-                continue
-            blob_url = f"{self.account_url}/{self.container_name}/{blob_name}"
-            try:
-                sample = _read_blob_dataframe(blob_url, reader, nrows=self.sample_rows)
-            except Exception:
-                continue  # unreadable/corrupt blob: skip it, don't break the whole listing
-            sources.append(
-                DataSource(
-                    name=Path(blob_name).stem,
-                    kind=_KIND_BY_SUFFIX[suffix],
-                    tool=EXECUTE_TABLE_CODE,
-                    columns={c: str(t) for c, t in sample.dtypes.items()},
-                    row_count=None,
-                    location=blob_url,
-                )
-            )
-        return sources
+    """Read a file-backed DataSource fully into a DataFrame. Used by execute_table_code - the one
+    place that needs the real, full file, not just a sample."""
+    if source.load is None:
+        raise ValueError(f"{source.name!r} is not a file source")
+    return source.load()
 
 
 def list_all_sources(connectors: list[DataSourceConnector]) -> list[DataSource]:
-    sources: list[DataSource] = []
+    """Every connector's sources; on a name clash the earlier connector wins (an upload shadows a shared sample)."""
+    sources: dict[str, DataSource] = {}
     for connector in connectors:
-        sources.extend(connector.list_sources())
-    return sources
+        for source in connector.list_sources():
+            sources.setdefault(source.name, source)
+    return list(sources.values())

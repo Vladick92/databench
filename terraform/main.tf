@@ -42,12 +42,24 @@ module "storage" {
   name                = "stdatabench${random_string.suffix.result}"
   resource_group_name = module.resource_group.name
   location            = module.resource_group.location
-  container_name      = "tabular-data"
+}
+
+# Users, chats and messages; free tier.
+module "cosmos" {
+  source              = "./modules/cosmos"
+  name                = "cosmos-databench-${random_string.suffix.result}"
+  resource_group_name = module.resource_group.name
+  location            = module.resource_group.location
+}
+
+# Signs the login tokens; stable across applies, new after a destroy.
+resource "random_password" "auth_secret" {
+  length  = 48
+  special = false
 }
 
 # --- Backend Web App ---
-# POSTGRES_DSN is deliberately not set here: docs/PLAN.md defers the DB, and backend/app/config.py
-# already treats an unset POSTGRES_DSN as "file sources only" with no code change needed.
+# POSTGRES_DSN (a database for the agent to analyse, not the app's own) is not set: there is none in Azure yet.
 module "backend_app" {
   source              = "./modules/web_app"
   name                = "app-databench-backend-${random_string.suffix.result}"
@@ -62,11 +74,13 @@ module "backend_app" {
 
   app_settings = merge(
     {
-      MODEL_PROVIDER               = "groq"
-      MODEL_NAME                   = var.model_name
-      MODEL_API_KEY                = var.groq_api_key
-      AZURE_STORAGE_ACCOUNT_NAME   = module.storage.name
-      AZURE_STORAGE_CONTAINER_NAME = module.storage.container_name
+      MODEL_PROVIDER             = "groq"
+      MODEL_NAME                 = var.model_name
+      MODEL_API_KEY              = var.groq_api_key
+      AZURE_STORAGE_ACCOUNT_NAME = module.storage.name
+      COSMOS_ENDPOINT            = module.cosmos.endpoint
+      COSMOS_DATABASE            = module.cosmos.database_name
+      AUTH_SECRET                = random_password.auth_secret.result
     },
     # Opt-in: only when a key is given does the backend get a fallback provider (backend/app/llm.py).
     var.openrouter_api_key == "" ? {} : {
@@ -111,11 +125,35 @@ resource "azurerm_role_assignment" "ui_acr_pull" {
   skip_service_principal_aad_check = true
 }
 
-# Only the backend touches Blob Storage - the UI goes through the backend's API, not Azure
-# directly, so only the backend's identity needs this.
+# Only the backend touches Blob Storage (the UI goes through its API); this also lets it create each user's container.
 resource "azurerm_role_assignment" "backend_storage_blob_contributor" {
   scope                            = module.storage.id
   role_definition_name             = "Storage Blob Data Contributor"
   principal_id                     = module.backend_app.principal_id
   skip_service_principal_aad_check = true
+}
+
+# Cosmos data access is a role system of its own; with no keys on the account it is the only way in.
+# 00000000-0000-0000-0000-000000000002 is the built-in "Cosmos DB Built-in Data Contributor" (read/write documents).
+locals {
+  cosmos_data_contributor = "${module.cosmos.id}/sqlRoleDefinitions/00000000-0000-0000-0000-000000000002"
+}
+
+data "azurerm_client_config" "current" {}
+
+resource "azurerm_cosmosdb_sql_role_assignment" "backend_cosmos_data" {
+  resource_group_name = module.resource_group.name
+  account_name        = module.cosmos.name
+  role_definition_id  = local.cosmos_data_contributor
+  principal_id        = module.backend_app.principal_id
+  scope               = module.cosmos.id
+}
+
+# You, so the portal's Data Explorer can show the data (without a key it only lets in a data role).
+resource "azurerm_cosmosdb_sql_role_assignment" "owner_cosmos_data" {
+  resource_group_name = module.resource_group.name
+  account_name        = module.cosmos.name
+  role_definition_id  = local.cosmos_data_contributor
+  principal_id        = data.azurerm_client_config.current.object_id
+  scope               = module.cosmos.id
 }

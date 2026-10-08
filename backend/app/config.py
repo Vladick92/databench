@@ -11,12 +11,7 @@ from pathlib import Path
 
 from dotenv import dotenv_values, load_dotenv
 
-from .agents.data_agent.tools.connectors import (
-    BlobFileConnector,
-    DataSourceConnector,
-    LocalFileConnector,
-    PostgresConnector,
-)
+from .agents.data_agent.tools.connectors import DataSourceConnector, LocalFileConnector, PostgresConnector
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent  # databench/
 MODEL_SERVICE_ENV = BASE_DIR.parent / "model_service" / ".env"
@@ -43,21 +38,31 @@ MAX_ROWS_RETURNED = int(os.getenv("MAX_ROWS_RETURNED", "1000"))
 # statistician charts the result and the data agent only writes a short summary.
 CHART_MIN_ROWS = int(os.getenv("CHART_MIN_ROWS", "15"))
 
-# Set by Terraform as Web App settings (see terraform/main.tf's backend_app module) - unset
-# locally, so BlobFileConnector just isn't registered and only the local data/ folder shows up.
+# What every user sees: the sample data/ folder baked into the image, and the Postgres database if
+# one is configured. A user's own uploads are added per request (agents/data_agent/tools/scope.py).
+SHARED_CONNECTORS: list[DataSourceConnector] = [LocalFileConnector(DATA_DIR)]
+if POSTGRES_DSN:
+    SHARED_CONNECTORS.append(PostgresConnector(POSTGRES_DSN, schema=POSTGRES_SCHEMA))
+
+# --- Users, chats, files: Terraform sets these in Azure; locally each has a stand-in under VAR_DIR ---
+VAR_DIR = Path(os.getenv("VAR_DIR", BASE_DIR / "var"))
+
+# Users, chats and messages: Cosmos DB in Azure, a SQLite file locally.
+COSMOS_ENDPOINT = os.getenv("COSMOS_ENDPOINT") or None
+COSMOS_DATABASE = os.getenv("COSMOS_DATABASE", "databench")
+APP_DB_PATH = VAR_DIR / "databench.db"
+
+# Each user's tables and charts: a Blob container per user in Azure, a folder per user locally.
 AZURE_STORAGE_ACCOUNT_NAME = os.getenv("AZURE_STORAGE_ACCOUNT_NAME") or None
-AZURE_STORAGE_CONTAINER_NAME = os.getenv("AZURE_STORAGE_CONTAINER_NAME", "tabular-data")
 AZURE_STORAGE_ACCOUNT_URL = (
     f"https://{AZURE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net" if AZURE_STORAGE_ACCOUNT_NAME else None
 )
+USER_FILES_DIR = VAR_DIR / "user_files"
+MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "25"))
 
-# Blob is additive, not a replacement for local files: the sample data/ folder ships baked into
-# the image either way, blob storage adds whatever the owner uploads through the UI on top of it.
-CONNECTORS: list[DataSourceConnector] = [LocalFileConnector(DATA_DIR)]
-if POSTGRES_DSN:
-    CONNECTORS.append(PostgresConnector(POSTGRES_DSN, schema=POSTGRES_SCHEMA))
-if AZURE_STORAGE_ACCOUNT_URL:
-    CONNECTORS.append(BlobFileConnector(AZURE_STORAGE_ACCOUNT_URL, AZURE_STORAGE_CONTAINER_NAME))
+# Signs the login tokens; required in Azure, made and kept in VAR_DIR on first use locally (auth.py).
+AUTH_SECRET = os.getenv("AUTH_SECRET") or None
+AUTH_TOKEN_HOURS = int(os.getenv("AUTH_TOKEN_HOURS", "12"))
 
 # --- Model ---
 # One preset per provider: base URL, a default model, and which key holds its credential (an

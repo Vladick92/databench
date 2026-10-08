@@ -1,56 +1,40 @@
-"""File management endpoints for the UI's upload/list/delete panel.
-
-Separate from the data agent's own list_data_sources tool: that one describes schemas for the
-LLM (columns, dtypes, which tool reads them); this one is the plain human-facing CRUD surface
-the UI's file manager talks to. Both end up reading the same blob container.
-"""
+"""The logged-in user's file manager (list, upload, delete); the data agent reads the same files via tools/scope.py."""
 from __future__ import annotations
 
-from azure.core.exceptions import ResourceNotFoundError
-from azure.identity import DefaultAzureCredential
-from azure.storage.blob import BlobServiceClient
-from fastapi import APIRouter, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, UploadFile
 
 from . import config
+from .auth import current_user
+from .userfiles import UserFiles, get_user_files, table_file_name
 
 router = APIRouter(prefix="/files", tags=["files"])
 
-_ALLOWED_SUFFIXES = (".csv", ".xlsx", ".xls")
-
-
-def _container():
-    if not config.AZURE_STORAGE_ACCOUNT_URL:
-        raise HTTPException(
-            status_code=503,
-            detail="Blob storage is not configured (AZURE_STORAGE_ACCOUNT_NAME is unset).",
-        )
-    client = BlobServiceClient(
-        account_url=config.AZURE_STORAGE_ACCOUNT_URL, credential=DefaultAzureCredential()
-    )
-    return client.get_container_client(config.AZURE_STORAGE_CONTAINER_NAME)
-
 
 @router.get("")
-async def list_files() -> list[dict]:
-    container = _container()
-    return [{"name": b.name, "size": b.size} for b in container.list_blobs()]
+def list_files(username: str = Depends(current_user), files: UserFiles = Depends(get_user_files)) -> list[dict]:
+    return [{"name": f.name, "size": f.size} for f in files.list_tables(username)]
 
 
 @router.post("")
-async def upload_file(file: UploadFile) -> dict:
-    if not file.filename.lower().endswith(_ALLOWED_SUFFIXES):
-        raise HTTPException(status_code=400, detail=f"Only {_ALLOWED_SUFFIXES} files are accepted.")
-    container = _container()
-    data = await file.read()
-    container.upload_blob(name=file.filename, data=data, overwrite=True)
-    return {"name": file.filename, "size": len(data)}
+def upload_file(file: UploadFile, username: str = Depends(current_user), files: UserFiles = Depends(get_user_files)) -> dict:
+    try:
+        name = table_file_name(file.filename)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+    limit = config.MAX_UPLOAD_MB * 1024 * 1024
+    data = file.file.read(limit + 1)
+    if len(data) > limit:
+        raise HTTPException(413, f"Files can be at most {config.MAX_UPLOAD_MB} MB.")
+    files.write(username, name, data)
+    return {"name": name, "size": len(data)}
 
 
 @router.delete("/{name}")
-async def delete_file(name: str) -> dict:
-    container = _container()
+def delete_file(name: str, username: str = Depends(current_user), files: UserFiles = Depends(get_user_files)) -> dict:
     try:
-        container.delete_blob(name)
-    except ResourceNotFoundError:
-        raise HTTPException(status_code=404, detail=f"No file named '{name}'.")
+        name = table_file_name(name)
+    except ValueError:
+        raise HTTPException(404, f"No file named '{name}'.") from None
+    if not files.delete(username, name):
+        raise HTTPException(404, f"No file named '{name}'.")
     return {"ok": True}

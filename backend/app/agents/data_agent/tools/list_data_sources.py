@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from agent_framework import tool
 
-from backend.app import config
 from .connectors import list_all_sources
+from .scope import active_connectors
 
 
 @tool
@@ -13,7 +13,7 @@ def list_data_sources() -> str:
     the exact name to use, which tool reads it, and its columns/types. Call this before writing
     any query whenever you don't already know a source's exact name and columns in this
     conversation - never guess them."""
-    sources = list_all_sources(config.CONNECTORS)
+    sources = list_all_sources(active_connectors())
     if not sources:
         return "No data sources are currently available."
 

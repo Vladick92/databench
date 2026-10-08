@@ -12,14 +12,14 @@ from typing import Annotated
 import duckdb
 from agent_framework import tool
 
-from backend.app import config
 from .connectors import EXECUTE_TABLE_CODE, DataSource, list_all_sources, read_source_dataframe
 from .results import finish_query
+from .scope import active_connectors
 from .sql_guard import SQLValidationError, validate_readonly_sql
 
 
 def _find_source(name: str) -> DataSource | None:
-    for source in list_all_sources(config.CONNECTORS):
+    for source in list_all_sources(active_connectors()):
         if source.name == name and source.tool == EXECUTE_TABLE_CODE:
             return source
     return None
@@ -46,7 +46,8 @@ def execute_table_code(
     except Exception as e:
         return f"Error reading {source.location}: {e}"
 
-    con = duckdb.connect(":memory:")
+    # No file or network access from SQL: read_csv/read_text/glob would read anything the server can (other users' files, its environment).
+    con = duckdb.connect(":memory:", config={"enable_external_access": False})
     try:
         con.register(source_name, df)
         result = con.execute(validated.sql).fetchdf()

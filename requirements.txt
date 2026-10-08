@@ -16,3 +16,7 @@ jinja2
 python-dotenv
 azure-identity
 azure-storage-blob
+azure-cosmos==4.17.1
+argon2-cffi==25.1.0
+PyJWT==2.15.0
+python-multipart==0.0.32  # uploads (backend/app/files.py)

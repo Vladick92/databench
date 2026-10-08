@@ -2,6 +2,7 @@
 .git/
 docs/
 eval/results/
+var/
 __pycache__/
 *.pyc
 .env

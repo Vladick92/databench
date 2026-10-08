@@ -21,8 +21,9 @@ import logging
 from collections.abc import AsyncIterator
 
 from backend.app import config
-from backend.app.agents.data_agent import QueryResult, build_data_agent, start_capture
+from backend.app.agents.data_agent import QueryResult, build_data_agent, start_capture, use_scope
 from backend.app.agents.statistician import build_prompt, build_statistician_agent, open_workspace
+from backend.app.userfiles import UserFiles
 
 log = logging.getLogger(__name__)
 
@@ -76,8 +77,10 @@ async def _run_statistician(question: str, result: QueryResult) -> AsyncIterator
             }
 
 
-async def run_data_exploration(message: str, session) -> AsyncIterator[Event]:
+async def run_data_exploration(message: str, session, username: str, files: UserFiles) -> AsyncIterator[Event]:
+    """`username` and `files` decide whose uploaded tables the data agent can see."""
     results = start_capture()
+    use_scope(username, files)
     async for event in _stream_agent(build_data_agent(), message, DATA_AGENT, session):
         yield event
 

@@ -19,6 +19,8 @@ services:
     volumes:
       - ./backend:/app/backend:ro # live-reload on code changes, no rebuild needed
       - ./data:/app/data:ro
+      # Local app state (config.VAR_DIR): users, chats, files, login key. A volume so nothing on the host is root-owned; `down -v` resets it.
+      - var:/app/var
       # ../model_service/.env is outside this build context and wasn't reachable at all inside
       # the container - config.py's MODEL_SERVICE_ENV resolves to BASE_DIR.parent/model_service/.env,
       # and BASE_DIR is /app here, so the mount target must be exactly /model_service/.env.
@@ -37,3 +39,6 @@ services:
       - ./ui:/app/ui:ro
     depends_on:
       - backend
+
+volumes:
+  var:

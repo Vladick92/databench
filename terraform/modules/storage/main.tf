@@ -18,8 +18,4 @@ resource "azurerm_storage_account" "this" {
   https_traffic_only_enabled = true
 }
 
-resource "azurerm_storage_container" "tabular_data" {
-  name                  = var.container_name
-  storage_account_id    = azurerm_storage_account.this.id
-  container_access_type = "private"
-}
+# No container here: the backend creates one per user ("user-<username>") at registration.
