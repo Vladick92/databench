@@ -41,12 +41,28 @@ def log_out() -> None:
 
 
 def api(method: str, path: str, **kwargs) -> httpx.Response:
-    """A request to the backend as the logged-in user. A 401 means the login ran out: back to the login screen."""
+    """A request to the backend as the logged-in user. A 401 means the login ran out: back to the login screen.
+    Raises BackendError if the backend can't be reached at all."""
     kwargs.setdefault("timeout", 15)
-    r = httpx.request(method, f"{BACKEND_URL}{path}", headers={"Authorization": f"Bearer {st.session_state.token}"}, **kwargs)
+    try:
+        r = httpx.request(method, f"{BACKEND_URL}{path}", headers={"Authorization": f"Bearer {st.session_state.token}"}, **kwargs)
+    except httpx.HTTPError as e:
+        raise BackendError(f"Couldn't reach the backend at {BACKEND_URL} ({type(e).__name__}).") from None
     if r.status_code == 401:
         log_out()
     return r
+
+
+def api_json(method: str, path: str, **kwargs):
+    """The JSON body of a successful call. BackendError, with the backend's own explanation, for anything
+    else - including an error page that isn't JSON."""
+    r = api(method, path, **kwargs)
+    if r.status_code >= 400:
+        raise BackendError(detail_of(r))
+    try:
+        return r.json()
+    except ValueError:
+        raise BackendError(f"The backend answered with something that isn't JSON (HTTP {r.status_code}).") from None
 
 
 def authenticate(path: str, username: str, password: str) -> None:
@@ -102,12 +118,16 @@ def start_new_chat() -> None:
 
 
 def open_chat(chat_id: str) -> None:
-    r = api("GET", f"/chats/{chat_id}")
-    if r.status_code == 200:
+    try:
+        chat = api_json("GET", f"/chats/{chat_id}")
+    except BackendError as e:
+        if "No such chat" not in str(e):  # unreachable, or a server error: keep what is on screen and say why
+            st.error(str(e))
+            return
+        start_new_chat()  # deleted from another tab or session
+    else:
         st.session_state.chat_id = chat_id
-        st.session_state.messages = [to_ui_message(m) for m in r.json()["messages"]]
-    else:  # deleted from another tab or session
-        start_new_chat()
+        st.session_state.messages = [to_ui_message(m) for m in chat["messages"]]
     st.rerun()
 
 
@@ -116,7 +136,12 @@ def render_chat_list() -> None:
     if st.button("➕ New chat", width="stretch"):
         start_new_chat()
         st.rerun()
-    for chat in api("GET", "/chats").json():
+    try:
+        chats = api_json("GET", "/chats")
+    except BackendError as e:
+        st.caption(f"⚠️ Couldn't load your chats: {e}")
+        return
+    for chat in chats:
         selected = chat["id"] == st.session_state.chat_id
         if st.button(chat["title"], key=f"chat_{chat['id']}", type="primary" if selected else "secondary", width="stretch"):
             open_chat(chat["id"])
@@ -124,9 +149,13 @@ def render_chat_list() -> None:
         with st.popover("🗑 Delete this chat", width="stretch"):
             st.write("This removes the chat and its charts.")
             if st.button("Yes, delete it", key="confirm_delete_chat", type="primary"):
-                api("DELETE", f"/chats/{st.session_state.chat_id}")
-                start_new_chat()
-                st.rerun()
+                try:
+                    api_json("DELETE", f"/chats/{st.session_state.chat_id}")
+                except BackendError as e:
+                    st.error(str(e))
+                else:
+                    start_new_chat()
+                    st.rerun()
 
 
 def render_tools(tools: list) -> None:
@@ -140,21 +169,20 @@ def render_file_manager() -> None:
     which the data agent can then query."""
     st.header("Your files")
     try:
-        files = api("GET", "/files").raise_for_status().json()
-    except httpx.HTTPStatusError as e:
-        st.caption(f"Couldn't list files: {e.response.status_code}")
-        return
-    except httpx.HTTPError as e:
-        st.caption(f"Couldn't reach backend: {type(e).__name__}")
+        files = api_json("GET", "/files")
+    except BackendError as e:
+        st.caption(f"⚠️ Couldn't list your files: {e}")
         return
 
     uploaded = st.file_uploader("Upload a csv/xlsx", type=["csv", "xlsx", "xls"])
     if uploaded is not None and st.button("Upload", key="upload_btn"):
-        r = api("POST", "/files", files={"file": (uploaded.name, uploaded.getvalue())}, timeout=60)
-        if r.status_code == 200:
+        try:
+            api_json("POST", "/files", files={"file": (uploaded.name, uploaded.getvalue())}, timeout=60)
+        except BackendError as e:
+            st.error(str(e))
+        else:
             st.success(f"Uploaded {uploaded.name}")
             st.rerun()
-        st.error(detail_of(r))
 
     if not files:
         st.caption("No files uploaded yet.")
@@ -162,8 +190,12 @@ def render_file_manager() -> None:
 
     selected = st.selectbox("Existing files", [f["name"] for f in files])
     if st.button("Delete selected", key="delete_btn"):
-        api("DELETE", f"/files/{selected}")
-        st.rerun()
+        try:
+            api_json("DELETE", f"/files/{selected}")
+        except BackendError as e:
+            st.error(str(e))
+        else:
+            st.rerun()
 
 
 def render_reply(m: dict) -> None:
@@ -254,7 +286,12 @@ if not st.session_state.token:
     st.stop()
 
 if "account_checked" not in st.session_state:  # a token can outlive its account (database reset)
-    api("GET", "/auth/me")
+    try:
+        api("GET", "/auth/me")  # a 401 logs out inside api()
+    except BackendError as e:
+        st.title("📊 databench — data agent")
+        st.error(f"{e} Start it, then reload this page.")
+        st.stop()
     st.session_state.account_checked = True
 
 with st.sidebar:

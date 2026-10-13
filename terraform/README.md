@@ -37,6 +37,22 @@ identity. The one secret Terraform makes is `AUTH_SECRET`, which signs the login
 The shared `tabular-data` blob container is gone: each user gets `user-<username>`, created by the
 backend when they register (the backend's Blob Data Contributor role allows it).
 
+## This is the `azure` run mode
+
+The backend has two run modes, picked by `APP_ENV` (`backend/app/config.py`). This stack is the `azure`
+one: Terraform sets `APP_ENV=azure` on the backend Web App together with everything that mode needs
+(`COSMOS_ENDPOINT`, `COSMOS_DATABASE`, `AZURE_STORAGE_ACCOUNT_NAME`, `AUTH_SECRET`), and the backend refuses
+to start if any of them is missing. The `local` mode (the default; `docker compose` or `uvicorn` on this
+machine) needs none of this: users, chats and messages in a SQLite file, each user's files in a folder
+under `azure_projects/users/`. Both modes talk to the same model, `openai/gpt-6-luna` on OpenRouter.
+
+Four behaviour settings exist in both places and are Terraform variables of the same name as the `.env`
+setting: `max_rows_returned`, `chart_min_rows`, `max_upload_mb`, `auth_token_hours` (defaults equal
+`backend/app/config.py`'s). Change one in `.env` and the variable too, or local and deployed differ.
+Not carried to Azure on purpose: `POSTGRES_*` (a DSN pointing at localhost is refused at startup there).
+After a deploy, the backend's log stream has one `databench backend started: run mode=azure ...` line
+with the effective settings.
+
 ## Before `apply`
 1. **Push the images first, or the sites 503 on first boot.** A fresh ACR has nothing in it yet:
    ```bash
@@ -48,21 +64,21 @@ backend when they register (the backend's Blob Data Contributor role allows it).
    2. `ACR_NAME=$(terraform output -raw acr_name) ./push_images.sh` (from the repo root)
    3. Restart both Web Apps (`az webapp restart ...`, printed by the push script) so they pick up the newly-pushed image
 2. **Budget alert email** - set `budget_alert_email` before applying, per `docs/PLAN.md`'s cost discipline rule (budget before spend).
-3. **Groq API key** - required, not optional:
+3. **OpenRouter API key** - required, not optional (the backend's model is `openai/gpt-6-luna` on OpenRouter, same as locally; the backend gets it as `OPENROUTER_MODEL`):
    ```bash
    export ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
-   export TF_VAR_groq_api_key=$(grep '^GROQ_API_KEY=' ../../model_service/.env | cut -d= -f2)
-   export TF_VAR_openrouter_api_key=$(grep '^OPENROUTER_API_KEY=' ../../model_service/.env | cut -d= -f2)   # optional: enables the OpenRouter fallback
+   export TF_VAR_openrouter_api_key=$(grep '^OPENROUTER_API_KEY=' ../../model_service/.env | cut -d= -f2)
    ```
-   Never put this in a `.tfvars` file you might commit - `TF_VAR_*` env vars only.
+   Never put this in a `.tfvars` file you might commit - `TF_VAR_*` env vars only. It is a paid model: it
+   spends the OpenRouter credit. `-var openrouter_free_fallback=true` lets OpenRouter's free router answer
+   when the model can't (off by default: free endpoints may log or train on prompts).
 
 ## Usage
 ```bash
 cd databench/terraform
 az login
 export ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
-export TF_VAR_groq_api_key=$(grep '^GROQ_API_KEY=' ../../model_service/.env | cut -d= -f2)
-export TF_VAR_openrouter_api_key=$(grep '^OPENROUTER_API_KEY=' ../../model_service/.env | cut -d= -f2)   # optional: enables the OpenRouter fallback
+export TF_VAR_openrouter_api_key=$(grep '^OPENROUTER_API_KEY=' ../../model_service/.env | cut -d= -f2)
 cp terraform.tfvars.example terraform.tfvars   # then edit budget_alert_email at minimum
 
 terraform init
@@ -81,7 +97,7 @@ az webapp restart -g $(terraform -chdir=terraform output -raw resource_group_nam
 Open the UI: `terraform output ui_url`.
 
 ## Things worth knowing
-- **State has secrets.** `groq_api_key` (as `MODEL_API_KEY` in the backend Web App's settings, and `openrouter_api_key` as `OPENROUTER_API_KEY` if set) is stored in `terraform.tfstate` in plain text - same tradeoff project 01 already made for `model_api_key`; fine for a local/solo learning setup with local state, not for a shared/remote backend without also adding Key Vault.
+- **State has secrets.** `openrouter_api_key` (as `OPENROUTER_API_KEY` in the backend Web App's settings) is stored in `terraform.tfstate` in plain text - same tradeoff project 01 already made for `model_api_key`; fine for a local/solo learning setup with local state, not for a shared/remote backend without also adding Key Vault.
 - **Container logging is on from the start** (`logs` block in `modules/web_app`) - project 01 hit a 503 with nothing to read because this was off; not repeating that here.
 - **B1, not F1.** Two Web Apps share one plan; F1's 60 CPU-min/day cap and no-Always-On would hurt with two apps on it. `always_on = true` and `use_32_bit_worker = false` follow from being off F1.
 - **Blob access tier is Hot**, not Cool/Archive, despite "least expensive" - Cool/Archive charge per-operation retrieval fees and have minimum retention periods, which cost more overall for a workbench with active upload/list/delete from the UI, not archived data.

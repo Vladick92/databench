@@ -7,6 +7,15 @@
 # already IS the host's real loopback, so Postgres and llama-server need no changes at all.
 # Trade-off: Linux-only (fine, this is a Linux dev machine) and no compose-internal DNS between
 # services - both containers just talk to each other over 127.0.0.1 like any other local process.
+#
+# Host networking also means the ports below are the machine's ports: the native app (uvicorn,
+# streamlit) and project 01's Streamlit use the same defaults. Set BACKEND_PORT / UI_PORT in .env to
+# move this stack. (llama-server's 8080 is set by its launcher script, run_local_model.sh.)
+#
+#   docker compose up --build                                     the dev stack: bind-mounted code, --reload
+#   docker compose --profile built up --build ui backend-built    the image exactly as Azure runs it: code
+#                                                                 baked in, no reload (the two backends
+#                                                                 share a port; run one of them)
 
 services:
   backend:
@@ -14,19 +23,47 @@ services:
       context: .
       dockerfile: backend/Dockerfile
     network_mode: host
+    # Your uid, so the files the app writes into ../users and ./var are yours, not root's. Compose can't
+    # see bash's $UID unless it is exported; 1000 is the first user on this machine.
+    user: "${UID:-1000}:${GID:-1000}"
     env_file:
       - .env
     volumes:
       - ./backend:/app/backend:ro # live-reload on code changes, no rebuild needed
       - ./data:/app/data:ro
-      # Local app state (config.VAR_DIR): users, chats, files, login key. A volume so nothing on the host is root-owned; `down -v` resets it.
-      - var:/app/var
+      # Local run mode (APP_ENV=local, the default). Each user's tables and charts: one folder per
+      # user, in azure_projects/users next to this repo. config.py computes BASE_DIR.parent/"users",
+      # and BASE_DIR is /app here, so the target has to be exactly /users.
+      - ../users:/users
+      # Local app state that isn't user data (config.VAR_DIR): the SQLite database (users, chats,
+      # messages) and the login key. The same ./var a native `uvicorn` uses, so both see the same
+      # accounts. It must exist and be yours before the first start (`mkdir -p var`), or Docker makes
+      # it root-owned. Reset everything local: `rm -rf var ../users/*` (accounts and files go together).
+      - ./var:/app/var
       # ../model_service/.env is outside this build context and wasn't reachable at all inside
       # the container - config.py's MODEL_SERVICE_ENV resolves to BASE_DIR.parent/model_service/.env,
       # and BASE_DIR is /app here, so the mount target must be exactly /model_service/.env.
       # Without it, MODEL_API_KEY silently fell back to "not-needed" and the provider API 401'd.
       - ../model_service/.env:/model_service/.env:ro
-    command: ["uvicorn", "backend.app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    command: ["uvicorn", "backend.app.main:app", "--host", "0.0.0.0", "--port", "${BACKEND_PORT:-8000}", "--reload"]
+
+  # The same image Azure runs: code from the image (not bind-mounted), no --reload, the image's own
+  # CMD and user. Only for checking a build before it is pushed; not started by a plain `up`.
+  backend-built:
+    profiles: ["built"]
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    network_mode: host
+    user: "${UID:-1000}:${GID:-1000}"
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data:ro
+      - ../users:/users
+      - ./var:/app/var
+      - ../model_service/.env:/model_service/.env:ro
+    command: ["uvicorn", "backend.app.main:app", "--host", "0.0.0.0", "--port", "${BACKEND_PORT:-8000}"]
 
   ui:
     build:
@@ -34,11 +71,14 @@ services:
       dockerfile: ui/Dockerfile
     network_mode: host
     environment:
-      - BACKEND_URL=http://127.0.0.1:8000
+      - BACKEND_URL=http://127.0.0.1:${BACKEND_PORT:-8000}
     volumes:
       - ./ui:/app/ui:ro
-    depends_on:
-      - backend
-
-volumes:
-  var:
+    command:
+      [
+        "streamlit", "run", "ui/main.py",
+        "--server.address=0.0.0.0", "--server.port=${UI_PORT:-8501}",
+        "--server.headless=true", "--browser.gatherUsageStats=false",
+      ]
+    # No depends_on: it would start the reload backend whenever the UI starts, and the `built`
+    # profile needs the UI without it. The UI shows "backend unreachable" until a backend is up.

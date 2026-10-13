@@ -157,11 +157,11 @@ class BlobUserFiles:
 
 @lru_cache
 def get_user_files() -> UserFiles:
-    """Blob containers when a storage account is configured (Azure), otherwise local folders."""
+    """Blob containers in the azure run mode, one local folder per user in the local one (config.APP_ENV)."""
     from backend.app import config  # not at the top: config imports the data agent, which imports this
 
-    if config.AZURE_STORAGE_ACCOUNT_URL:
+    if config.APP_ENV == "azure":
         from azure.identity import DefaultAzureCredential
 
         return BlobUserFiles(BlobServiceClient(config.AZURE_STORAGE_ACCOUNT_URL, credential=DefaultAzureCredential()))
-    return LocalUserFiles(config.USER_FILES_DIR)
+    return LocalUserFiles(config.USERS_DIR)

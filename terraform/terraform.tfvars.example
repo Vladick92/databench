@@ -1,9 +1,10 @@
 # Copy to terraform.tfvars (gitignored) and fill in, or pass via -var/TF_VAR_*.
-# groq_api_key should NOT go in this file if you ever intend to commit it - use
-# TF_VAR_groq_api_key instead (see terraform/README.md). Same for the optional openrouter_api_key.
+# openrouter_api_key (required) should NOT go in this file if you ever intend to commit it - use
+# TF_VAR_openrouter_api_key instead (see terraform/README.md).
 
 location            = "polandcentral"
 environment         = "dev"
 image_tag           = "v1"
+model_name          = "openai/gpt-6-luna" # same as MODEL_NAME in databench/.env
 budget_alert_email  = "" # set this before applying - see docs/PLAN.md cost discipline
 budget_amount       = 15

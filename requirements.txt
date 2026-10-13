@@ -12,6 +12,7 @@ psycopg[binary]==3.3.6
 pandas
 matplotlib==3.11.2
 openpyxl
+xlrd==2.0.1  # pandas needs it for the old .xls format
 jinja2
 python-dotenv
 azure-identity

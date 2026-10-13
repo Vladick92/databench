@@ -6,6 +6,7 @@ import json
 import logging
 import uuid
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from agent_framework import AgentSession, InMemoryHistoryProvider
 from agent_framework import Message as AgentMessage
@@ -14,6 +15,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
+from . import config
 from .auth import current_user
 from .auth import router as auth_router
 from .chats import CHAT_ID_PATTERN
@@ -25,7 +27,15 @@ from .workflows.data_exploration import DATA_AGENT, STATISTICIAN, describe_error
 
 log = logging.getLogger(__name__)
 
-app = FastAPI(title="databench data agent")
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    # uvicorn's own logger: the app's loggers have no handler at INFO, and this line is how a deployed
+    # backend's settings are read back from the Web App's log stream.
+    logging.getLogger("uvicorn.error").info("databench backend started: %s", config.describe())
+    yield
+
+
+app = FastAPI(title="databench data agent", lifespan=_lifespan)
 app.include_router(auth_router)
 app.include_router(chats_router)
 app.include_router(files_router)
@@ -45,8 +55,15 @@ def _title(message: str) -> str:
 
 
 def _remembering(earlier: list[Message]) -> AgentSession:
-    """A fresh session remembering the chat's questions and answers (not its tool calls); no process holds chat state."""
-    kept = [m for m in earlier if m.content and not m.extras.get("failed")]
+    """A fresh session remembering the chat's questions and answers (not its tool calls); no process holds chat state.
+
+    Only complete exchanges are remembered: a question goes in together with the answer that followed it.
+    A question whose answer failed, or was cut off before it said anything, goes out with it, so the model
+    never sees a user message with no reply (or two user messages in a row, which some providers refuse)."""
+    kept = []
+    for question, answer in zip(earlier, earlier[1:]):
+        if question.role == "user" and answer.role == "assistant" and answer.content and not answer.extras.get("failed"):
+            kept += [question, answer]
     session = AgentSession()
     session.state[InMemoryHistoryProvider.DEFAULT_SOURCE_ID] = {
         "messages": [AgentMessage(m.role, [m.content]) for m in kept[-_HISTORY_MESSAGES:]]

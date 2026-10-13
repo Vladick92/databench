@@ -198,12 +198,20 @@ def _draw_bars(ax, df: pd.DataFrame, spec: PlotSpec, horizontal: bool) -> tuple[
     table = value.unstack(hue) if hue else value.to_frame("value")
     if additive:
         table = table.fillna(0)
+
+    # How big a category (row) or a series (column) is, for ordering and for keeping the largest. Values
+    # add up for sum and count, so a category's size is its total. A mean, median, max or min of several
+    # series does not add up (the sum of two averages is nobody's average), so those are compared by
+    # their biggest cell.
+    def size(t: pd.DataFrame, axis: int) -> pd.Series:
+        return t.sum(axis=axis) if additive else t.max(axis=axis)
+
     if hue:
-        series_totals = table.sum().sort_values(ascending=False)
-        if len(series_totals) > MAX_SERIES:
-            facts.append(f"Note: '{hue}' has {len(series_totals)} values; only the {MAX_SERIES} largest are drawn.")
-            table = table[series_totals.index[:MAX_SERIES]]
-    totals = table.sum(axis=1)
+        series_size = size(table, 0).sort_values(ascending=False)
+        if len(series_size) > MAX_SERIES:
+            facts.append(f"Note: '{hue}' has {len(series_size)} values; only the {MAX_SERIES} largest are drawn.")
+            table = table[series_size.index[:MAX_SERIES]]
+    totals = size(table, 1)
     grand_total = float(totals.sum())
 
     natural = is_numeric(data[x]) or is_datetime(data[x])
@@ -216,8 +224,8 @@ def _draw_bars(ax, df: pd.DataFrame, spec: PlotSpec, horizontal: bool) -> tuple[
     if natural:
         table = table.sort_index()
     elif spec.sort == "value":
-        table = table.loc[table.sum(axis=1).sort_values(ascending=False).index]
-    totals = table.sum(axis=1)
+        table = table.loc[size(table, 1).sort_values(ascending=False).index]
+    totals = size(table, 1)
 
     labels = [shorten(fmt_label(k)) for k in table.index]
     pos = np.arange(len(table))
@@ -243,15 +251,28 @@ def _draw_bars(ax, df: pd.DataFrame, spec: PlotSpec, horizontal: bool) -> tuple[
         ax.set_xticks(pos[::step], labels[::step], rotation=30 if crowded else 0, ha="right" if crowded else "center")
         ax.yaxis.set_major_formatter(FuncFormatter(_compact))
 
-    shown = totals.sort_values(ascending=False)
-    top = [f"{fmt_label(k)}: {fmt_num(v)}" + (f" ({v / grand_total * 100:.0f}%)" if additive and grand_total else "") for k, v in shown.head(3).items()]
-    low_k, low_v = shown.index[-1], shown.iloc[-1]
-    facts.append(f"{len(table)} categories drawn. Highest: {'; '.join(top)}. Lowest: {fmt_label(low_k)}: {fmt_num(low_v)}.")
-    if additive:
-        facts.append(f"Total over all categories: {fmt_num(grand_total)}.")
-    if hue:
-        lead = table.sum().sort_values(ascending=False)
-        facts.append("Series totals: " + "; ".join(f"{c}: {fmt_num(v)}" for c, v in lead.head(5).items()) + ".")
+    if hue and not additive:
+        # One bar per (category, series): name the cells, not a category "total" that isn't one.
+        # (a pair with no rows is NaN, not a value; built by hand because DataFrame.stack() changed between pandas versions)
+        cells = pd.Series(
+            {(c, sr): v for c, row in table.iterrows() for sr, v in row.items() if pd.notna(v)}
+        ).sort_values(ascending=False)
+        top = [f"{fmt_label(c)} / {fmt_label(sr)}: {fmt_num(v)}" for (c, sr), v in cells.head(3).items()]
+        (low_c, low_s), low_v = cells.index[-1], cells.iloc[-1]
+        facts.append(
+            f"{len(table)} categories drawn, one bar per {hue} value; each bar is the {spec.agg} of {y}. "
+            f"Highest: {'; '.join(top)}. Lowest: {fmt_label(low_c)} / {fmt_label(low_s)}: {fmt_num(low_v)}."
+        )
+    else:
+        shown = totals.sort_values(ascending=False)
+        top = [f"{fmt_label(k)}: {fmt_num(v)}" + (f" ({v / grand_total * 100:.0f}%)" if additive and grand_total else "") for k, v in shown.head(3).items()]
+        low_k, low_v = shown.index[-1], shown.iloc[-1]
+        facts.append(f"{len(table)} categories drawn. Highest: {'; '.join(top)}. Lowest: {fmt_label(low_k)}: {fmt_num(low_v)}.")
+        if additive:
+            facts.append(f"Total over all categories: {fmt_num(grand_total)}.")
+        if hue:
+            lead = table.sum().sort_values(ascending=False)
+            facts.append("Series totals: " + "; ".join(f"{c}: {fmt_num(v)}" for c, v in lead.head(5).items()) + ".")
 
     if spec.y_label:
         value_name = spec.y_label

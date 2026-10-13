@@ -32,8 +32,8 @@ _NO_USER_HASH = _hasher.hash("no such user")
 def _secret() -> str:
     if config.AUTH_SECRET:
         return config.AUTH_SECRET
-    if config.COSMOS_ENDPOINT:  # a key made per instance would make every other instance reject the logins
-        raise RuntimeError("AUTH_SECRET must be set when the app runs against Cosmos DB (Azure).")
+    if config.APP_ENV == "azure":  # a key made per instance would make every other instance reject the logins
+        raise RuntimeError("AUTH_SECRET must be set when APP_ENV=azure.")
     path = config.VAR_DIR / "auth_secret"
     path.parent.mkdir(parents=True, exist_ok=True)
     try:

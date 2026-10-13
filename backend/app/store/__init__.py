@@ -11,8 +11,8 @@ __all__ = ["Chat", "Message", "Store", "User", "UsernameTaken", "get_store"]
 
 @lru_cache
 def get_store() -> Store:
-    """Cosmos DB when COSMOS_ENDPOINT is set (Azure), otherwise a SQLite file (local)."""
-    if config.COSMOS_ENDPOINT:
+    """Cosmos DB in the azure run mode, a SQLite file in the local one (config.APP_ENV)."""
+    if config.APP_ENV == "azure":
         from azure.cosmos import CosmosClient
         from azure.identity import DefaultAzureCredential
 

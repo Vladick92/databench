@@ -1,5 +1,5 @@
 # See docs/PLAN.md's architecture diagram note for how these fit together, including the
-# manual steps (pushing images, setting GROQ_API_KEY) that Terraform itself doesn't cover.
+# manual steps (pushing images, setting OPENROUTER_API_KEY) that Terraform itself doesn't cover.
 
 # ACR and Storage Account names must be globally unique across all of Azure; this suffix is
 # what makes "databench" collision-safe without the owner having to pick one by hand.
@@ -74,19 +74,28 @@ module "backend_app" {
 
   app_settings = merge(
     {
-      MODEL_PROVIDER             = "groq"
-      MODEL_NAME                 = var.model_name
-      MODEL_API_KEY              = var.groq_api_key
+      # The run mode (backend/app/config.py): Cosmos + Blob + AUTH_SECRET below. Without it the
+      # backend would start in local mode and refuse the Cosmos/Blob settings.
+      APP_ENV = "azure"
+
+      MODEL_PROVIDER     = "openrouter"
+      OPENROUTER_MODEL   = var.model_name         # not MODEL_NAME: this one only applies while openrouter is the provider
+      OPENROUTER_API_KEY = var.openrouter_api_key # the preset's own key variable, so no MODEL_API_KEY
+
       AZURE_STORAGE_ACCOUNT_NAME = module.storage.name
       COSMOS_ENDPOINT            = module.cosmos.endpoint
       COSMOS_DATABASE            = module.cosmos.database_name
       AUTH_SECRET                = random_password.auth_secret.result
+
+      # Behaviour knobs that also exist in a local .env: set here too, so the deployed app doesn't quietly
+      # run on code defaults while a local run uses something else. Defaults in variables.tf = config.py's.
+      MAX_ROWS_RETURNED = tostring(var.max_rows_returned)
+      CHART_MIN_ROWS    = tostring(var.chart_min_rows)
+      MAX_UPLOAD_MB     = tostring(var.max_upload_mb)
+      AUTH_TOKEN_HOURS  = tostring(var.auth_token_hours)
     },
-    # Opt-in: only when a key is given does the backend get a fallback provider (backend/app/llm.py).
-    var.openrouter_api_key == "" ? {} : {
-      MODEL_FALLBACK_PROVIDERS = "openrouter"
-      OPENROUTER_API_KEY       = var.openrouter_api_key
-    },
+    # Opt-in: OpenRouter's free router answers when the model above can't (backend/app/llm.py).
+    var.openrouter_free_fallback ? { MODEL_FALLBACK_PROVIDERS = "openrouter" } : {},
   )
 }
 

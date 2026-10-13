@@ -4,6 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 
 from . import config
+from .agents.data_agent.tools.connectors import read_table_bytes
 from .auth import current_user
 from .userfiles import UserFiles, get_user_files, table_file_name
 
@@ -25,6 +26,10 @@ def upload_file(file: UploadFile, username: str = Depends(current_user), files: 
     data = file.file.read(limit + 1)
     if len(data) > limit:
         raise HTTPException(413, f"Files can be at most {config.MAX_UPLOAD_MB} MB.")
+    try:  # a file the agent can't read would sit in the manager, invisible to every question
+        read_table_bytes(name, data, nrows=1)
+    except Exception as e:
+        raise HTTPException(400, f"{name} can't be read as a table ({type(e).__name__}: {str(e)[:150]}).") from None
     files.write(username, name, data)
     return {"name": name, "size": len(data)}
 
